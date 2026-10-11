@@ -75,8 +75,8 @@ class AttackerEnvironment:
         
             # Login with CSRF token
             session.post(login_url, data={
-                'username': 'admin',
-                'password': 'password',
+                'username': DVWA_DEFAULT_USER,
+                'password': DVWA_DEFAULT_PASS,
                 'Login': 'Login',
                 'user_token': token
             })

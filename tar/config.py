@@ -4,6 +4,8 @@ Contains network settings, IP addresses, ports, and global constants
 COMPLETE VERSION - Compatible with all project scripts
 """
 
+import os
+
 # ═══════════════════════════════════════════════════════════════════════════
 # NETWORK CONFIGURATION
 # ═══════════════════════════════════════════════════════════════════════════
@@ -131,8 +133,10 @@ FIREWALL_STATE_FILE = "/var/log/cyber-sim/firewall_state.json"
 DVWA_URL = "http://192.168.50.20/DVWA"
 DVWA_DIR = "/var/www/html/DVWA"
 DVWA_LOGIN_URL = f"{DVWA_URL}/login.php"
-DVWA_DEFAULT_USER = "admin"
-DVWA_DEFAULT_PASS = "password"
+# DVWA ships with these as its own public defaults; override via env vars
+# if you changed them. Never put a real password here.
+DVWA_DEFAULT_USER = os.environ.get("DVWA_USER", "admin")
+DVWA_DEFAULT_PASS = os.environ.get("DVWA_PASS", "password")
 
 # ═══════════════════════════════════════════════════════════════════════════
 # LOGGING CONFIGURATION
@@ -156,16 +160,6 @@ MODEL_SAVE_DIR = "/opt/cyberlab/models"
 DEFENDER_MODEL_PATH = "/opt/cyberlab/models/defender_q_table.pkl"
 ATTACKER_MODEL_PATH = "/opt/cyberlab/models/attacker_q_table.pkl"
 
-# ═══════════════════════════════════════════════════════════════════════════
-# DATABASE CONFIGURATION
-# ═══════════════════════════════════════════════════════════════════════════
-DB_CONFIG = {
-    'host': DEFENDER_IP,
-    'port': 5432,
-    'database': 'cyber_sim',
-    'user': 'sim_user',
-    'password': 'sim_password'
-}
 
 # ═══════════════════════════════════════════════════════════════════════════
 # TIMEOUT AND RETRY SETTINGS

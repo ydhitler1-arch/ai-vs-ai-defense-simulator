@@ -1,8 +1,0 @@
-# Normalize line endings: LF in the repo (the lab VMs run Linux)
-* text=auto eol=lf
-
-# Binary files
-*.pkl binary
-*.png binary
-*.jpg binary
-*.pdf binary
