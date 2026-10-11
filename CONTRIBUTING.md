@@ -46,7 +46,7 @@ Open an issue and include:
   `config.py`. If you change a shared setting, update every copy.
 - Don't commit generated files. Models (`*.pkl`), `*.restore` files and
   `__pycache__` are git-ignored.
-- Update the README if you change commands, flags or behaviour.
+- Update the README if you change commands, flags or behaviour, and add a note under "Unreleased" in `CHANGELOG.md`.
 
 ## Pull requests
 
