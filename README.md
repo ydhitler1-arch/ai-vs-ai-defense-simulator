@@ -8,19 +8,36 @@ firewall actions, learning over many episodes which responses work best.
 > **Authorized lab use only.** Run this only on a private, isolated network of
 > virtual machines that you own and control.
 
+## Background
+
+This started as a college mini project. The code in this repository is what
+was actually run in the lab described below.
+
 ## Lab layout
 
-The simulator assumes four VMs on an internal `192.168.50.0/24` network
-(`cyberlab`), configured in `config.py`:
+The simulator runs on four VirtualBox VMs attached to a VirtualBox internal
+network named `cyberlab`. The network has no route to the internet or the host
+LAN. Each VM has a static IP in `192.168.50.0/24`, configured in `config.py`:
 
-| Folder | Role                         | IP              |
-|--------|------------------------------|-----------------|
-| `att/` | Attacker VM                  | `192.168.50.10` |
-| `tar/` | Target VM (Apache, SSH, MySQL, DVWA) | `192.168.50.20` |
-| `def/` | Defender VM (simulation engine, firewall) | `192.168.50.30` |
-| `mon/` | Monitor VM (Snort IDS, metrics) | `192.168.50.40` |
+| Folder | Role                                      | OS     | IP              |
+|--------|-------------------------------------------|--------|-----------------|
+| `att/` | Attacker VM                               | Kali Linux | `192.168.50.10` |
+| `tar/` | Target VM (Apache, SSH, MySQL, DVWA)      | Ubuntu | `192.168.50.20` |
+| `def/` | Defender VM (simulation engine, firewall) | Ubuntu | `192.168.50.30` |
+| `mon/` | Monitor VM (Snort IDS, metrics)           | Ubuntu | `192.168.50.40` |
 
 Each folder is deployed to its own VM and carries its own copy of `config.py`.
+
+### VirtualBox setup
+
+1. Create four VMs: one Kali Linux (attacker) and three Ubuntu (target,
+   defender, monitor).
+2. Set each VM's network adapter to **Internal Network** with the name
+   `cyberlab`.
+3. Assign each VM its static IP from the table above (for example with Netplan
+   on Ubuntu, or the network settings on Kali).
+4. Copy each folder to its VM and run the simulation from `def/` on the
+   defender.
 
 ## How it works
 

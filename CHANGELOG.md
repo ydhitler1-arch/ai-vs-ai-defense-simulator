@@ -9,6 +9,8 @@ Unreleased.
 ## [Unreleased]
 
 ### Added
+- README documents the VirtualBox lab: one Kali attacker and three Ubuntu VMs on an
+  isolated internal network with static IPs.
 - Initial release of the AI vs AI Cyber Defense Simulator: Q-learning attacker
   and defender agents, Snort IDS and traffic-rate monitoring, `iptables`-based
   firewall responses, metrics logging and plot generation, with the lab split
