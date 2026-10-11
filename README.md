@@ -89,3 +89,7 @@ Logs, metrics and graphs are written under `/var/log/cyber-sim/` by default
 - `config.py` contains the DVWA default credentials (`admin` / `password`).
   These are the publicly known defaults for the intentionally vulnerable DVWA
   app and must never be used on a real system.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
