@@ -9,7 +9,7 @@ Thanks for your interest in the AI vs AI Cyber Defense Simulator!
   the lab network.
 - Never commit real credentials, API keys or captured traffic. The DVWA defaults
   in `config.py` are the only credentials that belong in the repo.
-- Be respectful and constructive in issues and pull requests.
+- Follow the [Code of Conduct](CODE_OF_CONDUCT.md) in issues and pull requests.
 
 ## Reporting bugs and suggesting features
 
