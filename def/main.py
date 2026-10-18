@@ -44,7 +44,7 @@ try:
         METRICS_OUTPUT_DIR, SIMULATION_LOG_FILE, LOG_LEVEL,
         MODEL_SAVE_DIR, SNORT_ALERT_FILE, IPTABLES_CHAIN,
     )
-    from utils import setup_logger, ensure_dir, timestamp_now
+    from utils import setup_logger, ensure_dir, timestamp_now, ensure_utf8_stdout
     from simulation_engine import SimulationEngine
     from visualizer import generate_all_plots
 except ImportError as e:
@@ -428,6 +428,7 @@ def _write_run_metadata(args: argparse.Namespace):
 # ---------------------------------------------------------------------------
 
 def main():
+    ensure_utf8_stdout()
     print(BANNER)
 
     parser = build_arg_parser()
