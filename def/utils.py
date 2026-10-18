@@ -22,6 +22,30 @@ from config import (
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# CONSOLE OUTPUT
+# ═══════════════════════════════════════════════════════════════════════════
+
+def ensure_utf8_stdout():
+    """
+    Make stdout/stderr tolerate Unicode (box-drawing chars, arrows, ✓/✗, …)
+    used throughout this project's console output and plain print() calls.
+
+    On Linux (the lab VMs) stdout is UTF-8 by default, so this is a no-op
+    there. On Windows, the console defaults to a legacy codepage (e.g.
+    cp1252) that can't encode those characters, and a bare print() with one
+    of them raises UnicodeEncodeError and crashes the script. Call this once
+    near the top of a script's entry point, before any such print().
+    """
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        if stream is not None and hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass  # best-effort; never let this helper itself crash the script
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # LOGGING FUNCTIONS
 # ═══════════════════════════════════════════════════════════════════════════
 

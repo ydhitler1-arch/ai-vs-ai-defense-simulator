@@ -38,7 +38,7 @@ from config import (
     SNORT_ALERT_FILE, SNORT_LOG_DIR, TARGET_IP, ATTACKER_IP,
     IDS_ALERT_WINDOW_SECONDS, LOG_DIR
 )
-from utils import get_logger, save_json
+from utils import get_logger, save_json, ensure_utf8_stdout
 
 logger = get_logger("IDSMonitor")
 
@@ -582,6 +582,7 @@ class IDSMonitor:
 # ═══════════════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
     import time
+    ensure_utf8_stdout()
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
 

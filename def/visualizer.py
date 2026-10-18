@@ -42,7 +42,7 @@ import seaborn as sns
 from typing import Dict, List, Optional, Tuple
 
 from config import METRICS_OUTPUT_DIR, LOG_LEVEL
-from utils import setup_logger, ensure_dir
+from utils import setup_logger, ensure_dir, ensure_utf8_stdout
 
 logger = setup_logger("Visualizer", None, LOG_LEVEL)
 
@@ -665,6 +665,7 @@ def generate_all_plots(metrics_dir: str = None):
 
 
 if __name__ == "__main__":
+    ensure_utf8_stdout()
     parser = argparse.ArgumentParser(
         description="Generate visualisation plots for AI-vs-AI Cyber Defense Simulator")
     parser.add_argument("--dir", type=str, default=None,

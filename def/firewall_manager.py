@@ -36,7 +36,7 @@ from config import (
     DEFENDER_IP, TARGET_IP, ATTACKER_IP,
     FIREWALL_STATE_FILE, LOG_DIR
 )
-from utils import get_logger, save_json
+from utils import get_logger, save_json, ensure_utf8_stdout
 
 logger = get_logger("FirewallManager")
 
@@ -477,6 +477,7 @@ class FirewallManager:
 # ═══════════════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
     import sys
+    ensure_utf8_stdout()
     logging.basicConfig(level=logging.DEBUG,
                         format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
 
