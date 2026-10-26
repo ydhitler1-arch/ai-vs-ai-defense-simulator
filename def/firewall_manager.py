@@ -154,6 +154,13 @@ class FirewallState:
     def get_all_rate_limited(self) -> dict:
         return dict(self.state["rate_limited_ips"])
 
+    def reset(self):
+        """Forget every remembered rule (used after the iptables chain is flushed)."""
+        with self._lock:
+            self.state = {"blocked_ips": [], "rate_limited_ips": {},
+                          "isolated_targets": [], "rules": []}
+            self._save()
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # FIREWALL MANAGER (main class)
@@ -457,6 +464,14 @@ class FirewallManager:
         except Exception as e:
             logger.warning(f"Could not write audit log: {e}")
 
+    def _forget_rules(self):
+        """The chain was just flushed, so forget what was installed in it.
+        Otherwise block_ip / isolate_target / rate_limit_ip find their old entry
+        ("already blocked") and skip installing the rule, and the saved state
+        file keeps stale entries into the next run."""
+        with self._lock:
+            self.fstate.reset()
+
     def flush_episode_rules(self):
         """Flush temporary firewall rules for current episode."""
         print("[FirewallManager] Flushing episode firewall rules...")
@@ -464,6 +479,7 @@ class FirewallManager:
             os.system(f"sudo iptables -F {self.chain}")
         except Exception as e:
             print(f"[FirewallManager] Could not flush episode rules: {e}")
+        self._forget_rules()
 
     def flush_all_episode_rules(self):
         """Flush all firewall rules."""
@@ -472,6 +488,7 @@ class FirewallManager:
             os.system(f"sudo iptables -F {self.chain}")
         except Exception as e:
             print(f"[FirewallManager] Could not flush all rules: {e}")
+        self._forget_rules()
 # ═══════════════════════════════════════════════════════════════════════════
 # STANDALONE TEST (runs in DRY_RUN mode automatically if not root)
 # ═══════════════════════════════════════════════════════════════════════════
