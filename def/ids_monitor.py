@@ -113,8 +113,10 @@ class SnortFastParser:
     RE_PRIORITY = re.compile(r'\[Priority:\s*(\d+)\]')
     RE_PROTO    = re.compile(r'\{(\w+)\}\s+([\d.]+):?(\d*)\s+->\s+([\d.]+):?(\d*)')
 
-    # Priority → severity mapping
-    SEVERITY_MAP = {1: 3, 2: 2, 3: 1}   # snort priority → our severity
+    # Priority → severity mapping. The lab's custom Snort rules have no
+    # classtype, so Snort prints "Priority: 0"; treat that as high severity
+    # (every rule there is an attack signature) instead of the lowest.
+    SEVERITY_MAP = {0: 3, 1: 3, 2: 2, 3: 1}   # snort priority → our severity
 
     def parse_block(self, block: str) -> Optional[SnortAlert]:
         """Parse a multi-line Snort fast-format alert block."""

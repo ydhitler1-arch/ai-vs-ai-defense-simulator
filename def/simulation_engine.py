@@ -347,6 +347,9 @@ class SimulationEngine:
                     f"{config.STEPS_PER_EPISODE} steps each.")
 
         try:
+            # Without this the alert tailer never runs and the defender
+            # never sees any IDS alert (detection accuracy stays at 0%).
+            self.ids_monitor.start()
             for ep in range(1, config.TOTAL_EPISODES + 1):
                 if self._stop_event.is_set():
                     logger.info("Stop signal received — halting simulation.")
@@ -596,16 +599,17 @@ class SimulationEngine:
         }.get(attack_type, 0.5)
 
         if random.random() < alert_prob:
+            # Same one-line layout Snort's "fast" alert mode writes, so
+            # IDSMonitor's parser can read it.
             alert_line = (
-                f'[**] [1:1000001:1] Simulated {attack_type.upper()} Alert [**]\n'
-                f'[Priority: 2]\n'
-                f'{datetime.now().strftime("%m/%d-%H:%M:%S.%f")} '
-                f'{ATTACKER_IP}:54321 -> {TARGET_IP}:80\n'
+                f'{datetime.now().strftime("%m/%d-%H:%M:%S.%f")}  '
+                f'[**] [1:1000001:1] Simulated {attack_type.upper()} Alert [**] '
+                f'[Priority: 2] {{TCP}} {ATTACKER_IP}:54321 -> {TARGET_IP}:80\n'
             )
             # Append to Snort alert file so IDSMonitor picks it up
             try:
                 with open(SNORT_ALERT_FILE, "a") as f:
-                    f.write(alert_line + "\n")
+                    f.write(alert_line)
             except IOError as e:
                 logger.warning(f"Could not write simulated alert: {e}")
 
