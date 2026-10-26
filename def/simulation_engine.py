@@ -382,6 +382,9 @@ class SimulationEngine:
             self.env.reset()
             self.firewall.flush_episode_rules()
             flush_snort_alerts(SNORT_ALERT_FILE)
+            # flush_snort_alerts only truncates the file (and cannot when it is
+            # a read-only NFS share); also drop what the monitor already read.
+            self.ids_monitor.clear_alerts()
 
         self._reset_episode_stats()
         episode_obj = Episode(episode_num)
@@ -611,7 +614,13 @@ class SimulationEngine:
                 with open(SNORT_ALERT_FILE, "a") as f:
                     f.write(alert_line)
             except IOError as e:
-                logger.warning(f"Could not write simulated alert: {e}")
+                # Read-only alert file (e.g. the NFS share from the target):
+                # only real Snort alerts will arrive. Warn once, not per attack.
+                if not getattr(self, "_alert_write_warned", False):
+                    logger.warning(f"Could not write simulated alert ({e}); the alert "
+                                   f"file is probably read-only, so only real Snort "
+                                   f"alerts will be seen. Not repeating this warning.")
+                    self._alert_write_warned = True
 
     def _do_ddos(self, info: Dict) -> Tuple[bool, Dict]:
         """Simulate DDoS attack against target"""

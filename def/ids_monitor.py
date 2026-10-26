@@ -499,6 +499,14 @@ class IDSMonitor:
         """Return cumulative IDS statistics."""
         return dict(self.stats)
 
+    def clear_alerts(self):
+        """Forget cached alerts. Called at the start of each episode so alerts
+        from the previous episode (still inside the 30 s window) are not seen
+        as recent. Cumulative statistics are kept."""
+        with self._cache_lock:
+            self._cache.clear()
+        self._ip_alert_counts.clear()
+
     # ──────────────────────────────────────────────────────────────────────
     # MANUAL ALERT INJECTION (for testing / simulation without real Snort)
     # ──────────────────────────────────────────────────────────────────────

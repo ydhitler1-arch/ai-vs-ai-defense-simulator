@@ -336,13 +336,24 @@ def parse_alert_line(line: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+_flush_warned = False
+
+
 def flush_snort_alerts(alert_file: str):
-    """Clear the Snort alert file."""
+    """Clear the Snort alert file. A read-only file (e.g. the NFS share from
+    the target) is left alone, with one message instead of one per episode."""
+    global _flush_warned
     try:
         if os.path.exists(alert_file):
             open(alert_file, 'w').close()
     except Exception as e:
-        logging.warning(f"Could not flush Snort alerts: {e}")
+        # Use a named logger: logging.warning() on the root logger installs a
+        # root handler and makes every later log line print twice.
+        if not _flush_warned:
+            get_logger("Utils").warning(
+                f"Cannot clear {alert_file} ({e}); it will not be flushed "
+                f"between episodes.")
+            _flush_warned = True
 
 
 # ═══════════════════════════════════════════════════════════════════════════
