@@ -121,6 +121,11 @@ ALERT_SOCKET_PATH = "/tmp/snort_alerts.sock"
 # IDS alert window (seconds)
 IDS_ALERT_WINDOW_SECONDS = 30
 
+# Network interface the IDS monitor watches for per-IP packet rates.
+# Run `ip -br a` on the defender to find the one on 192.168.50.0/24, or
+# override with the CYBERLAB_INTERFACE environment variable.
+TRAFFIC_INTERFACE = os.environ.get("CYBERLAB_INTERFACE", "enp0s8")
+
 # ═══════════════════════════════════════════════════════════════════════════
 # FIREWALL CONFIGURATION
 # ═══════════════════════════════════════════════════════════════════════════

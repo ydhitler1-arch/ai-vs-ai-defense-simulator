@@ -40,6 +40,11 @@ from config import (
 )
 from utils import get_logger, save_json, ensure_utf8_stdout
 
+try:
+    from config import TRAFFIC_INTERFACE
+except ImportError:  # config.py on this VM predates the setting
+    TRAFFIC_INTERFACE = os.environ.get("CYBERLAB_INTERFACE", "enp0s8")
+
 logger = get_logger("IDSMonitor")
 
 
@@ -303,10 +308,10 @@ class IDSMonitor:
     Used by DefenderAI.observe() to build the current observation.
     """
 
-    def __init__(self, alert_file: str = None, interface: str = "eth1"):
+    def __init__(self, alert_file: str = None, interface: str = None):
         self.alert_file   = alert_file or SNORT_ALERT_FILE
         self.parser       = SnortFastParser()
-        self.traffic      = TrafficRateMonitor(interface=interface)
+        self.traffic      = TrafficRateMonitor(interface=interface or TRAFFIC_INTERFACE)
 
         # Alert cache: list of SnortAlert objects
         self._cache: List[SnortAlert] = []
