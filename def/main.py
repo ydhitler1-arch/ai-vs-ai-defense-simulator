@@ -450,7 +450,9 @@ def main():
     args   = parser.parse_args()
 
     logger.info(f"AI-vs-AI Cyber Defense Simulator — {timestamp_now()}")
-    logger.info(f"Mode: {args.mode.upper()}")
+    live = getattr(args, "live", False) and args.mode == "simulate"
+    logger.info("Mode: LIVE (real attacker, real Snort alerts)" if live
+                else f"Mode: {args.mode.upper()}")
     logger.info(f"Python: {sys.version.split()[0]}  |  "
                 f"Platform: {platform.system()} {platform.release()}")
     logger.info(f"Working dir: {SCRIPT_DIR}")

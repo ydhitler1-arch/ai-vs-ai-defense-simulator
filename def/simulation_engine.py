@@ -7,6 +7,7 @@ state, distributes observations, collects rewards, and coordinates all
 subsystems (IDS monitor, firewall manager, metrics logger).
 """
 
+import os
 import time
 import threading
 import logging
@@ -346,12 +347,18 @@ class SimulationEngine:
         logger.info(f"Starting simulation: {config.TOTAL_EPISODES} episodes, "
                     f"{config.STEPS_PER_EPISODE} steps each.")
         if getattr(config, "LIVE_MODE", False):
+            fw_host = os.environ.get("CYBERLAB_FW_HOST", "").strip()
+            if fw_host:
+                where = (f"Firewall rules are enforced on {fw_host} over SSH, so blocks "
+                         "stop the real attacker.")
+            else:
+                where = ("Firewall rules are applied on THIS VM, and the attacker's traffic "
+                         "does not pass through it, so blocks do not stop the real attacker "
+                         "until enforcement on the target is configured.")
             logger.warning(
                 "LIVE MODE: no attacks are simulated. Start attacker_ai.py on the "
                 "attacker VM; the defender reacts to real Snort alerts from "
-                f"{self.env.attacker_ip}. Firewall rules are applied on THIS VM, and "
-                "the attacker's traffic does not pass through it, so blocks do not "
-                "stop the real attacker until enforcement on the target is configured.")
+                f"{self.env.attacker_ip}. {where}")
 
         try:
             # Without this the alert tailer never runs and the defender
