@@ -26,6 +26,7 @@ Chain strategy:
 
 import os
 import json
+import shlex
 import subprocess
 import threading
 import logging
@@ -46,15 +47,69 @@ CHAIN_NAME = "CYBERLAB_DEFENSE"
 # ═══════════════════════════════════════════════════════════════════════════
 # LOW-LEVEL IPTABLES RUNNER
 # ═══════════════════════════════════════════════════════════════════════════
+def _remote_settings():
+    """
+    Enforcement on another host (the target) over SSH, configured with environment
+    variables. Returns None when CYBERLAB_FW_HOST is not set (rules are then applied
+    on this machine, as before).
+    """
+    host = os.environ.get("CYBERLAB_FW_HOST", "").strip()
+    if not host:
+        return None
+    return {
+        "host": host,
+        "user": os.environ.get("CYBERLAB_FW_USER", "cyberfw"),
+        "key": os.environ.get("CYBERLAB_FW_KEY", "/opt/cyberlab/cyberlab_fw_key"),
+        "known_hosts": os.environ.get("CYBERLAB_FW_KNOWN_HOSTS",
+                                      "/opt/cyberlab/cyberlab_fw_known_hosts"),
+        "iface": os.environ.get("CYBERLAB_FW_IFACE", "").strip(),
+    }
+
+
 class IPTablesRunner:
     """
     Thin wrapper around subprocess calls to iptables.
     Dry-run mode (DRY_RUN=True) prints commands without executing them.
+    With CYBERLAB_FW_HOST set, the commands run on that host over SSH instead.
     """
     DRY_RUN: bool = os.getenv("CYBERLAB_DRY_RUN", "0") == "1"
 
+    def _command(self, args: list) -> list:
+        remote = _remote_settings()
+        if remote is None:
+            return ["sudo", "iptables"] + args
+        quoted = " ".join(shlex.quote(a) for a in args)   # the remote shell re-parses it
+        return [
+            "ssh", "-i", remote["key"],
+            "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes",
+            "-o", "StrictHostKeyChecking=accept-new",
+            "-o", f"UserKnownHostsFile={remote['known_hosts']}",
+            "-o", "ConnectTimeout=5",
+            # reuse one connection: each iptables call would otherwise cost a new login
+            "-o", "ControlMaster=auto", "-o", "ControlPersist=60",
+            "-o", "ControlPath=/tmp/cyberlab-fw-%C",
+            f"{remote['user']}@{remote['host']}",
+            f"sudo -n iptables {quoted}",
+        ]
+
+    def check_remote(self):
+        """Fail fast, with a hint, if the target cannot be reached for enforcement."""
+        remote = _remote_settings()
+        if remote is None or self.DRY_RUN:
+            return
+        try:
+            result = subprocess.run(self._command(["-S", "INPUT"]),
+                                    capture_output=True, text=True, timeout=15)
+        except Exception as e:
+            raise RuntimeError(f"Cannot enforce on {remote['host']}: {e}")
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"Cannot enforce on {remote['user']}@{remote['host']} "
+                f"(ssh key {remote['key']}): {result.stderr.strip()} - see the "
+                f"'Live mode' section of the README for the one-time setup on the target.")
+
     def run(self, args: list, check: bool = True) -> subprocess.CompletedProcess:
-        cmd = ["sudo", "iptables"] + args
+        cmd = self._command(args)
         logger.debug(f"iptables: {' '.join(cmd)}")
         if self.DRY_RUN:
             logger.info(f"[DRY-RUN] {' '.join(cmd)}")
@@ -178,22 +233,49 @@ class FirewallManager:
         self.ipt    = IPTablesRunner()
         self.fstate = FirewallState()
         self._lock  = threading.RLock()
+        remote = _remote_settings()
+        if remote is not None:
+            if not remote["iface"]:
+                raise RuntimeError(
+                    "CYBERLAB_FW_IFACE must be set (the lab network interface on the "
+                    "target, for example enp0s8) when CYBERLAB_FW_HOST is used, so the "
+                    "rules cannot cut off the target's other interfaces.")
+            self.ipt.check_remote()
+            logger.warning(f"Enforcing firewall rules on {remote['user']}@{remote['host']} "
+                           f"(interface {remote['iface']}) over SSH.")
         self._ensure_chain()
         logger.info("FirewallManager ready.")
 
     # ──────────────────────────────────────────────────────────────────────
     # CHAIN BOOTSTRAP
     # ──────────────────────────────────────────────────────────────────────
+    def _input_jump(self) -> list:
+        """Arguments of the INPUT -> chain jump. When enforcing on the target it is
+        limited to the lab interface, so the target's other interfaces stay untouched."""
+        remote = _remote_settings()
+        if remote is not None:
+            return ["INPUT", "-i", remote["iface"], "-j", CHAIN_NAME]
+        return ["INPUT", "-j", CHAIN_NAME]
+
     def _ensure_chain(self):
         try:
             self.ipt.run(["-N", CHAIN_NAME], check=False)
 
-            # Fix: remove duplicate -C from check
-            if not self.ipt.rule_exists(["INPUT", "-j", CHAIN_NAME]):
-                self.ipt.run(["-I", "INPUT", "-j", CHAIN_NAME])
+            jump = self._input_jump()
+            if not self.ipt.rule_exists(jump):
+                self.ipt.run(["-I"] + jump)
 
-            if not self.ipt.rule_exists(["FORWARD", "-j", CHAIN_NAME]):
-                self.ipt.run(["-I", "FORWARD", "-j", CHAIN_NAME])
+            remote = _remote_settings()
+            if remote is not None:
+                # Keep the control channel open no matter what the chain does: accept the
+                # defender at the very top of INPUT (above the jump, outside the chain, so
+                # flushing the chain never removes it).
+                guard = ["INPUT", "-i", remote["iface"], "-s", DEFENDER_IP, "-j", "ACCEPT"]
+                if not self.ipt.rule_exists(guard):
+                    self.ipt.run(["-I", "INPUT", "1"] + guard[1:])
+            else:
+                if not self.ipt.rule_exists(["FORWARD", "-j", CHAIN_NAME]):
+                    self.ipt.run(["-I", "FORWARD", "-j", CHAIN_NAME])
 
             logger.debug(f"Chain {CHAIN_NAME} is ready.")
         except Exception as e:
@@ -421,7 +503,7 @@ class FirewallManager:
         """Completely remove the CYBERLAB_DEFENSE chain (cleanup after simulation)."""
         with self._lock:
             self.flush_all_rules()
-            self.ipt.run(["-D", "INPUT",   "-j", CHAIN_NAME], check=False)
+            self.ipt.run(["-D"] + self._input_jump(), check=False)
             self.ipt.run(["-D", "FORWARD", "-j", CHAIN_NAME], check=False)
             self.ipt.run(["-X", CHAIN_NAME], check=False)
             logger.info(f"[FIREWALL] Chain {CHAIN_NAME} removed.")
@@ -476,7 +558,7 @@ class FirewallManager:
         """Flush temporary firewall rules for current episode."""
         print("[FirewallManager] Flushing episode firewall rules...")
         try:
-            os.system(f"sudo iptables -F {self.chain}")
+            self.ipt.run(["-F", self.chain], check=False)
         except Exception as e:
             print(f"[FirewallManager] Could not flush episode rules: {e}")
         self._forget_rules()
@@ -485,7 +567,7 @@ class FirewallManager:
         """Flush all firewall rules."""
         print("[FirewallManager] Flushing all firewall rules...")
         try:
-            os.system(f"sudo iptables -F {self.chain}")
+            self.ipt.run(["-F", self.chain], check=False)
         except Exception as e:
             print(f"[FirewallManager] Could not flush all rules: {e}")
         self._forget_rules()

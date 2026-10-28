@@ -97,6 +97,77 @@ treats validation warnings as errors.
 Logs, metrics and graphs are written under `/var/log/cyber-sim/` by default
 (see `config.py`).
 
+## Live mode
+
+Normally the engine simulates the attacker. In live mode it does not: the attacker is a
+separate process on the Kali VM, Snort on the target raises real alerts, and the defender
+reacts to the alerts whose source is the attacker's IP (alerts from any other host, such as
+the defender itself, are ignored). Start the defender first, then the attacker:
+
+```bash
+sudo python3 main.py --live --episodes 3 --steps 60      # defender VM, in def/
+python3 attacker_ai.py --mode train --episodes 1          # attacker VM, in att/
+```
+
+`--live-step SECONDS` sets the time per defender decision (default 1 s). Metrics keep their
+names with live meanings: `attack_success_rate` is the share of attack steps in which the
+attacker was not contained, and `detection_accuracy` the share in which the defender responded.
+
+### Enforcing blocks on the target
+
+By default the defender applies its `iptables` rules on the defender VM, which the attacker's
+traffic does not pass through, so blocks do not stop a real attacker. To enforce on the target
+instead, the defender runs `iptables` there over SSH. One-time setup:
+
+1. On the **defender**, create a key used only for this (the engine runs as root, so the key
+   belongs to root):
+
+   ```bash
+   sudo ssh-keygen -t ed25519 -N "" -C cyberlab-fw -f /opt/cyberlab/cyberlab_fw_key
+   sudo cat /opt/cyberlab/cyberlab_fw_key.pub
+   ```
+
+2. On the **target**, create a locked user that may log in only with that key, only from the
+   defender, and may run only `iptables` through sudo. Replace `PUBLIC_KEY_LINE` with the line
+   printed above:
+
+   ```bash
+   sudo adduser --disabled-password --gecos "" cyberfw
+   sudo install -d -m 700 -o cyberfw -g cyberfw /home/cyberfw/.ssh
+   echo 'from="192.168.50.30",restrict PUBLIC_KEY_LINE' | sudo tee /home/cyberfw/.ssh/authorized_keys
+   sudo chown cyberfw:cyberfw /home/cyberfw/.ssh/authorized_keys && sudo chmod 600 /home/cyberfw/.ssh/authorized_keys
+   echo 'cyberfw ALL=(root) NOPASSWD: /usr/sbin/iptables' | sudo tee /etc/sudoers.d/cyberfw
+   sudo chmod 440 /etc/sudoers.d/cyberfw && sudo visudo -c
+   ```
+
+3. On the **target**, find the interface that carries the lab network (the one holding
+   `192.168.50.20`) with `ip -br a`. Rules are limited to that interface so the target's other
+   interfaces stay reachable.
+
+4. On the **defender**, check the connection:
+
+   ```bash
+   sudo ssh -i /opt/cyberlab/cyberlab_fw_key -o IdentitiesOnly=yes -o UserKnownHostsFile=/opt/cyberlab/cyberlab_fw_known_hosts -o StrictHostKeyChecking=accept-new cyberfw@192.168.50.20 sudo -n iptables -S INPUT
+   ```
+
+5. Run the defender with enforcement turned on:
+
+   ```bash
+   sudo CYBERLAB_FW_HOST=192.168.50.20 CYBERLAB_FW_IFACE=enp0s8 python3 main.py --live --episodes 3 --steps 60
+   ```
+
+   Other settings: `CYBERLAB_FW_USER` (default `cyberfw`), `CYBERLAB_FW_KEY`,
+   `CYBERLAB_FW_KNOWN_HOSTS`. If the target cannot be reached the defender stops at start-up
+   instead of pretending to enforce.
+
+The rules live in their own chain, `CYBERLAB_DEFENSE`, and the defender is accepted at the top of
+`INPUT` outside that chain, so a rule can never cut off the control connection. If you ever need
+to undo everything from the target's console:
+
+```bash
+sudo iptables -F CYBERLAB_DEFENSE && sudo iptables -D INPUT -i enp0s8 -j CYBERLAB_DEFENSE
+```
+
 ## Notes
 
 - Trained Q-tables (`*.pkl`), `*.restore` files and `__pycache__` are
