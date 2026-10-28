@@ -228,6 +228,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--strict", action="store_true",
         help="Treat validation warnings as errors (fail fast)",
     )
+    parser.add_argument(
+        "--live", action="store_true",
+        help=("Live mode: do not simulate attacks. The defender reacts to real Snort\n"
+              "alerts from the attacker VM (run attacker_ai.py there)."),
+    )
+    parser.add_argument(
+        "--live-step", type=float, default=None, metavar="SECONDS",
+        help="Live mode: seconds per defender decision (default: LIVE_STEP_SECONDS)",
+    )
     return parser
 
 
@@ -246,6 +255,12 @@ def run_simulation(args: argparse.Namespace):
     if args.steps:
         cfg.STEPS_PER_EPISODE = args.steps
         logger.info(f"Overriding STEPS_PER_EPISODE → {args.steps}")
+    if args.live:
+        cfg.LIVE_MODE = True
+        logger.info("Live mode enabled (--live): no simulated attacker.")
+    if args.live_step:
+        cfg.LIVE_STEP_SECONDS = args.live_step
+        logger.info(f"Overriding LIVE_STEP_SECONDS → {args.live_step}")
 
     engine = SimulationEngine()
 

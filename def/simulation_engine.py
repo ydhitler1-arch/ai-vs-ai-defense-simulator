@@ -345,6 +345,13 @@ class SimulationEngine:
         self.is_running = True
         logger.info(f"Starting simulation: {config.TOTAL_EPISODES} episodes, "
                     f"{config.STEPS_PER_EPISODE} steps each.")
+        if getattr(config, "LIVE_MODE", False):
+            logger.warning(
+                "LIVE MODE: no attacks are simulated. Start attacker_ai.py on the "
+                "attacker VM; the defender reacts to real Snort alerts from "
+                f"{self.env.attacker_ip}. Firewall rules are applied on THIS VM, and "
+                "the attacker's traffic does not pass through it, so blocks do not "
+                "stop the real attacker until enforcement on the target is configured.")
 
         try:
             # Without this the alert tailer never runs and the defender
@@ -388,6 +395,11 @@ class SimulationEngine:
 
         self._reset_episode_stats()
         episode_obj = Episode(episode_num)
+
+        if getattr(config, "LIVE_MODE", False):
+            self.defender.decay_epsilon()
+            self._run_live_episode(episode_obj)
+            return
 
         # Decay exploration rates
         self.attacker.decay_epsilon()
@@ -494,6 +506,98 @@ class SimulationEngine:
             time.sleep(config.STEP_DELAY_SECONDS)
 
         # ── End of episode: log metrics ───────────────────────────────
+        self._finalise_episode(episode_obj)
+
+    # ------------------------------------------------------------------
+    # Live mode (the attacker is a separate process; no simulated attacks)
+    # ------------------------------------------------------------------
+
+    def _run_live_episode(self, episode_obj):
+        """
+        One episode of live mode. Each step the defender looks at the real Snort
+        alerts whose source is the attacker's IP (alerts from any other host, such
+        as the defender itself, are ignored), decides, and learns.
+
+        Metrics reuse the simulation's field names with these meanings:
+          attack step              a step with at least one recent alert from the attacker
+          attack_success_rate      attack steps in which the attacker was NOT contained
+                                   (no block / rate-limit installed for it) / attack steps
+          detection_accuracy       attack steps in which the defender responded
+                                   (block, rate-limit or isolate, not just log) / attack steps
+          false_positive_rate      blocks made while the attacker was quiet / all blocks
+        """
+        window = getattr(config, "LIVE_ALERT_WINDOW_SECONDS", 5)
+        attacker_ip = self.env.attacker_ip
+
+        for step in range(1, config.STEPS_PER_EPISODE + 1):
+            if self._stop_event.is_set():
+                break
+
+            self.env.current_step = step
+            time.sleep(getattr(config, "LIVE_STEP_SECONDS", 1.0))
+            step_start = time.time()
+
+            # 1. what did Snort see from the attacker?
+            recent = self.ids_monitor.get_recent_alerts(seconds=window)
+            attacker_alerts = [a for a in recent if a.get("src_ip") == attacker_ip]
+            self.env.ingest_alerts(attacker_alerts)
+            attack_happening = bool(attacker_alerts)
+
+            # 2. defender decides and acts
+            def_obs = self.env.get_defender_observation()
+            def_action = self.defender.choose_action(def_obs)
+            correct = self._execute_defense(def_action, attack_happening)
+            responded = def_action in ("block_ip", "rate_limit", "isolate_target")
+            contained = (self.env.attacker_blocked
+                         or attacker_ip in self.env.rate_limited_ips)
+
+            if def_action == "block_ip":
+                if correct:
+                    self._ep_blocks += 1
+                else:
+                    self._ep_false_positives += 1
+            if attack_happening:
+                self._ep_attack_attempts += 1
+                if not contained:
+                    self._ep_attack_successes += 1
+                if responded:
+                    self._ep_detections += 1
+
+            response_time = time.time() - step_start
+            self._ep_response_times.append(response_time)
+
+            # 3. reward and learn (only the defender learns here)
+            def_reward = self.reward_calc.defender_reward(
+                def_action, self.env, attack_happening, correct)
+            self._ep_defender_rewards.append(def_reward)
+            self._ep_attacker_rewards.append(0.0)
+            self.defender.update_q_table(
+                def_obs, def_action, def_reward, self.env.get_defender_observation())
+
+            atk_label = "live_attack" if attack_happening else "none"
+            logger.info(f"  [Step {step:03d}] attacker_alerts={len(attacker_alerts)}  "
+                        f"DEF={str(def_action):<14s} correct={correct}  "
+                        f"contained={contained}  resp={response_time:.3f}s")
+
+            step_result = StepResult(
+                step=step, atk_action=atk_label,
+                atk_success=attack_happening and not contained, atk_reward=0.0,
+                def_action=def_action, def_correct=correct, def_reward=def_reward,
+                alert_count=len(attacker_alerts), response_time=response_time,
+            )
+            episode_obj.add_step(step_result)
+            self.metrics.log_step(self.current_episode, {
+                "step": step,
+                "atk_action": atk_label,
+                "atk_success": attack_happening and not contained,
+                "atk_reward": 0.0,
+                "def_action": def_action,
+                "def_correct": correct,
+                "def_reward": def_reward,
+                "alert_count": len(attacker_alerts),
+                "response_time": response_time,
+            })
+
         self._finalise_episode(episode_obj)
 
     # ------------------------------------------------------------------
@@ -644,12 +748,18 @@ class SimulationEngine:
     # Defense execution
     # ------------------------------------------------------------------
 
-    def _execute_defense(self, action: str) -> bool:
+    def _execute_defense(self, action: str, attack_happening: Optional[bool] = None) -> bool:
         """
         Execute the chosen defender action via FirewallManager.
         Returns True if the action was genuinely beneficial (correctly applied).
+
+        attack_happening: ground truth for this step. Live mode passes it (alerts from
+        the attacker's IP in the recent window); the simulation derives it from the
+        environment flags, as before.
         """
-        attack_happening = self.env.alert_count_window > 0 or self.env.attacker_detected
+        live = getattr(config, "LIVE_MODE", False)
+        if attack_happening is None:
+            attack_happening = self.env.alert_count_window > 0 or self.env.attacker_detected
 
         if action == "block_ip":
             if attack_happening:
@@ -670,7 +780,9 @@ class SimulationEngine:
         elif action == "isolate_target":
             result = self.firewall.isolate_target(TARGET_IP, allow_management_ip=DEFENDER_IP)
             self.env.apply_firewall_action("isolate_target")
-            return result and self.env.target_compromised
+            # Live mode cannot know whether the target was compromised, so isolation
+            # counts as correct while the attacker is active.
+            return result and (attack_happening if live else self.env.target_compromised)
 
         elif action == "restore_services":
             result = self.firewall.restore_rules(self.env.attacker_ip)
@@ -747,7 +859,8 @@ class SimulationEngine:
 
         # Periodically save AI models
         if self.current_episode % 10 == 0:
-            self.attacker.save_model()
+            if not getattr(config, "LIVE_MODE", False):
+                self.attacker.save_model()
             self.defender.save_model()
             logger.info(f"  AI models saved at episode {self.current_episode}.")
 
@@ -779,7 +892,8 @@ class SimulationEngine:
         self.ids_monitor.stop()
         self.firewall.flush_all_episode_rules()
         self.metrics.finalise()
-        self.attacker.save_model()
+        if not getattr(config, "LIVE_MODE", False):
+            self.attacker.save_model()      # unused (and untrained) in live mode
         self.defender.save_model()
         self.is_running = False
         logger.info("All subsystems shut down cleanly.")

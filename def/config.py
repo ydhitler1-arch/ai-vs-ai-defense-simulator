@@ -180,6 +180,13 @@ STEP_DELAY_SECONDS = 0.1
 ENV_RESET_BETWEEN_EPISODES = True
 ATTACKER_DETECTION_THRESHOLD = 5
 
+# Live mode (python3 main.py --live): the engine does not simulate an attacker.
+# The attacker is a separate process (attacker_ai.py on the Kali VM) and the
+# defender reacts to the real Snort alerts that come from ATTACKER_IP.
+LIVE_MODE = False
+LIVE_STEP_SECONDS = 1.0            # one defender decision per second
+LIVE_ALERT_WINDOW_SECONDS = 5      # an alert counts as "attack in progress" this long
+
 # ═══════════════════════════════════════════════════════════════════════════
 # FEATURE ENGINEERING FOR RL
 # ═══════════════════════════════════════════════════════════════════════════
