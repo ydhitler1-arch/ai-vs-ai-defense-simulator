@@ -120,23 +120,52 @@ traffic does not pass through, so blocks do not stop a real attacker. To enforce
 instead, the defender runs `iptables` there over SSH. One-time setup:
 
 1. On the **defender**, create a key used only for this (the engine runs as root, so the key
-   belongs to root):
+   belongs to root), then print the complete line the target needs:
 
    ```bash
    sudo ssh-keygen -t ed25519 -N "" -C cyberlab-fw -f /opt/cyberlab/cyberlab_fw_key
-   sudo cat /opt/cyberlab/cyberlab_fw_key.pub
    ```
 
+   ```bash
+   sudo sh -c 'echo "from=\"192.168.50.30\",restrict $(cat /opt/cyberlab/cyberlab_fw_key.pub)"'
+   ```
+
+   Copy that whole printed line (it starts with `from=` and ends with `cyberlab-fw`).
+
 2. On the **target**, create a locked user that may log in only with that key, only from the
-   defender, and may run only `iptables` through sudo. Replace `PUBLIC_KEY_LINE` with the line
-   printed above:
+   defender, and may run only `iptables` through sudo. Run these one at a time:
 
    ```bash
    sudo adduser --disabled-password --gecos "" cyberfw
+   ```
+
+   ```bash
    sudo install -d -m 700 -o cyberfw -g cyberfw /home/cyberfw/.ssh
-   echo 'from="192.168.50.30",restrict PUBLIC_KEY_LINE' | sudo tee /home/cyberfw/.ssh/authorized_keys
+   ```
+
+   The next command waits for input: paste the line you copied, press Enter, then Ctrl+D.
+
+   ```bash
+   sudo tee /home/cyberfw/.ssh/authorized_keys
+   ```
+
+   ```bash
    sudo chown cyberfw:cyberfw /home/cyberfw/.ssh/authorized_keys && sudo chmod 600 /home/cyberfw/.ssh/authorized_keys
+   ```
+
+   Check the file holds the real key, with `ssh-ed25519 ...` near the end of the line:
+
+   ```bash
+   sudo cat /home/cyberfw/.ssh/authorized_keys
+   ```
+
+   Then allow `iptables` only:
+
+   ```bash
    echo 'cyberfw ALL=(root) NOPASSWD: /usr/sbin/iptables' | sudo tee /etc/sudoers.d/cyberfw
+   ```
+
+   ```bash
    sudo chmod 440 /etc/sudoers.d/cyberfw && sudo visudo -c
    ```
 
