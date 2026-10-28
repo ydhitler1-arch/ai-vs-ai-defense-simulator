@@ -42,6 +42,7 @@ from utils import get_logger, save_json, ensure_utf8_stdout
 logger = get_logger("FirewallManager")
 
 CHAIN_NAME = "CYBERLAB_DEFENSE"
+RATE_LIMIT_TAG = "cyberlab-ratelimit"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -108,7 +109,8 @@ class IPTablesRunner:
                 f"(ssh key {remote['key']}): {result.stderr.strip()} - see the "
                 f"'Live mode' section of the README for the one-time setup on the target.")
 
-    def run(self, args: list, check: bool = True) -> subprocess.CompletedProcess:
+    def run(self, args: list, check: bool = True, quiet: bool = False) -> subprocess.CompletedProcess:
+        """quiet: a non-zero exit is an expected answer (for example a -C probe), not a warning."""
         cmd = self._command(args)
         logger.debug(f"iptables: {' '.join(cmd)}")
         if self.DRY_RUN:
@@ -119,7 +121,7 @@ class IPTablesRunner:
                 cmd, capture_output=True, text=True,
                 timeout=10, check=check
             )
-            if result.returncode != 0:
+            if result.returncode != 0 and not quiet:
                 logger.warning(f"iptables non-zero exit: {result.stderr.strip()}")
             return result
         except subprocess.CalledProcessError as e:
@@ -132,7 +134,7 @@ class IPTablesRunner:
     def rule_exists(self, table_args: list) -> bool:
         """Check if a rule already exists (uses -C check flag)."""
         check_args = ["-C"] + table_args
-        result = self.run(check_args, check=False)
+        result = self.run(check_args, check=False, quiet=True)
         return result.returncode == 0
 
 
@@ -259,7 +261,7 @@ class FirewallManager:
 
     def _ensure_chain(self):
         try:
-            self.ipt.run(["-N", CHAIN_NAME], check=False)
+            self.ipt.run(["-N", CHAIN_NAME], check=False, quiet=True)   # may already exist
 
             jump = self._input_jump()
             if not self.ipt.rule_exists(jump):
@@ -295,6 +297,10 @@ class FirewallManager:
                 logger.info(f"{ip} is already blocked.")
                 return True
             try:
+                # A block replaces a rate limit on the same IP (the limit's ACCEPT rule
+                # would otherwise sit above the DROP and let packets through).
+                if ip in self.fstate.get_all_rate_limited():
+                    self._remove_rate_limit_rules(ip)
                 # Block in CYBERLAB_DEFENSE chain
                 self.ipt.run(["-I", CHAIN_NAME, "1",
                               "-s", ip, "-j", "DROP"])
@@ -344,36 +350,25 @@ class FirewallManager:
         """
         with self._lock:
             try:
-                # Remove any existing rate-limit for this IP first
+                # A block or an isolation is stronger. The limit's ACCEPT rule would go
+                # above their DROP and let the traffic through, so do not install it.
+                if self.fstate.is_blocked(ip) or self.fstate.state["isolated_targets"]:
+                    logger.info(f"{ip} is already blocked or its target isolated; "
+                                f"rate limit not needed.")
+                    return True
+                current = self.fstate.get_all_rate_limited().get(ip)
+                if current and current["rate"] == rate and current["burst"] == burst:
+                    logger.info(f"{ip} is already rate-limited.")
+                    return True       # re-adding would also refill the burst allowance
+
+                # Remove any existing (different) rate-limit for this IP first
                 self._remove_rate_limit_rules(ip)
 
-                # Insert rate-limit rule: allow up to `rate` (with burst),
-                # then DROP excess.
-                # Rule 1: Accept packets within the rate limit
-                self.ipt.run([
-                    "-I", CHAIN_NAME, "1",
-                    "-s", ip,
-                    "-m", "limit",
-                    "--limit", rate,
-                    "--limit-burst", str(burst),
-                    "-j", "ACCEPT"
-                ])
-                # Rule 2: Drop packets that exceed the rate limit
-                self.ipt.run([
-                    "-I", CHAIN_NAME, "1",
-                    "-s", ip,
-                    "-m", "limit",
-                    "--limit", rate,
-                    "--limit-burst", str(burst),
-                    "-j", "LOG",
-                    "--log-prefix", "[CYBERLAB-RATELIMIT] ",
-                    "--log-level", "4"
-                ], check=False)
-                self.ipt.run([
-                    "-A", CHAIN_NAME,
-                    "-s", ip,
-                    "-j", "DROP"
-                ])
+                # Allow up to `rate` (with burst), then DROP the excess.
+                accept, log, drop = self._rate_limit_specs(ip, rate, burst)
+                self.ipt.run(["-I", CHAIN_NAME, "1"] + accept)
+                self.ipt.run(["-I", CHAIN_NAME, "1"] + log, check=False)
+                self.ipt.run(["-A", CHAIN_NAME] + drop)
 
                 self.fstate.add_rate_limited(ip, rate, burst)
                 self._audit_log("RATE_LIMIT", ip, extra={"rate": rate, "burst": burst})
@@ -383,17 +378,28 @@ class FirewallManager:
                 logger.error(f"Failed to rate-limit {ip}: {e}")
                 return False
 
+    def _rate_limit_specs(self, ip: str, rate: str, burst: int):
+        """The three rules of a rate limit. iptables -D needs the exact rule, and the
+        comment tags them so deleting the limit's DROP can never remove a block's DROP."""
+        match = ["-s", ip, "-m", "limit", "--limit", rate, "--limit-burst", str(burst),
+                 "-m", "comment", "--comment", RATE_LIMIT_TAG]
+        accept = match + ["-j", "ACCEPT"]
+        log = match + ["-j", "LOG", "--log-prefix", "[CYBERLAB-RATELIMIT] ", "--log-level", "4"]
+        drop = ["-s", ip, "-m", "comment", "--comment", RATE_LIMIT_TAG, "-j", "DROP"]
+        return accept, log, drop
+
     def _remove_rate_limit_rules(self, ip: str):
-        """Remove all rate-limit rules for an IP (best-effort)."""
-        # Flush rules for this IP from our chain
-        # iptables doesn't support IP-specific flush; we delete known patterns
-        self.ipt.run(["-D", CHAIN_NAME, "-s", ip, "-j", "DROP"], check=False)
-        self.ipt.run(["-D", CHAIN_NAME, "-s", ip, "-m", "limit",
-                      "-j", "ACCEPT"], check=False)
-        self.ipt.run(["-D", CHAIN_NAME, "-s", ip, "-m", "limit",
-                      "-j", "LOG",
-                      "--log-prefix", "[CYBERLAB-RATELIMIT] ",
-                      "--log-level", "4"], check=False)
+        """Remove the rate-limit rules of an IP, using the rate and burst they were added with."""
+        current = self.fstate.get_all_rate_limited().get(ip)
+        if current:
+            for spec in self._rate_limit_specs(ip, current["rate"], current["burst"]):
+                if self.ipt.DRY_RUN:
+                    self.ipt.run(["-D", CHAIN_NAME] + spec, check=False)
+                    continue
+                for _ in range(20):      # also clears duplicates
+                    if not self.ipt.rule_exists([CHAIN_NAME] + spec):
+                        break
+                    self.ipt.run(["-D", CHAIN_NAME] + spec, check=False)
         self.fstate.remove_rate_limited(ip)
 
     def clear_rate_limits(self):
@@ -419,31 +425,27 @@ class FirewallManager:
             try:
                 mgmt_ip = allow_management_ip or DEFENDER_IP
 
-                # Allow established/related first
+                # Every rule goes in at the top, so isolation overrides anything installed
+                # earlier (a rate limit's ACCEPT would otherwise let traffic through).
+                # Inserted bottom-up; the resulting order is: management ACCEPT, LOG, DROP.
+                # There is deliberately no "established" ACCEPT: it would sit above an
+                # earlier block's DROP and keep the attacker's open connections alive.
                 self.ipt.run([
                     "-I", CHAIN_NAME, "1",
                     "-d", target_ip,
-                    "-m", "state", "--state", "ESTABLISHED,RELATED",
-                    "-j", "ACCEPT"
+                    "-j", "DROP"
                 ])
-                # Allow management IP
                 self.ipt.run([
                     "-I", CHAIN_NAME, "1",
-                    "-s", mgmt_ip, "-d", target_ip,
-                    "-j", "ACCEPT"
-                ])
-                # Drop all other inbound to target
-                self.ipt.run([
-                    "-A", CHAIN_NAME,
                     "-d", target_ip,
                     "-j", "LOG",
                     "--log-prefix", "[CYBERLAB-ISOLATE] ",
                     "--log-level", "4"
                 ], check=False)
                 self.ipt.run([
-                    "-A", CHAIN_NAME,
-                    "-d", target_ip,
-                    "-j", "DROP"
+                    "-I", CHAIN_NAME, "1",
+                    "-s", mgmt_ip, "-d", target_ip,
+                    "-j", "ACCEPT"
                 ])
 
                 self.fstate.add_isolated(target_ip)
